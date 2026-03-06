@@ -1,7 +1,7 @@
 import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 
 group = "io.github.sndnv"
-version = "1.0.0"
+version = "1.0.1-SNAPSHOT"
 
 repositories {
     mavenCentral()
