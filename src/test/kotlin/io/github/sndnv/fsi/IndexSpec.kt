@@ -1,6 +1,7 @@
 package io.github.sndnv.fsi
 
 import io.github.sndnv.fsi.backends.MapIndex
+import io.github.sndnv.fsi.backends.SharedIndex
 import io.github.sndnv.fsi.backends.TrieIndex
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.withClue
@@ -17,6 +18,7 @@ class IndexSpec : WordSpec({
     include(indexSpec(type = "map-concurrent"))
     include(indexSpec(type = "map-custom"))
     include(indexSpec(type = "trie-mutable"))
+    include(indexSpec(type = "shared"))
 }) {
     companion object {
         fun indexSpec(type: String) = wordSpec {
@@ -25,6 +27,7 @@ class IndexSpec : WordSpec({
                 "map-concurrent" -> MapIndex.concurrent()
                 "map-custom" -> MapIndex.custom(map = HashMap())
                 "trie-mutable" -> TrieIndex.mutable(separator = "/")
+                "shared" -> SharedIndex.default()
                 else -> throw IllegalArgumentException("Unexpected type provided: [$type]")
             }
 
@@ -328,6 +331,7 @@ class IndexSpec : WordSpec({
                     val expectedKeysSize: Long = when (type) {
                         "map-mutable", "map-concurrent", "map-custom" -> entries.keys.sumOf { it.length }.toLong()
                         "trie-mutable" -> 4 // +1 for "a", +1 "b", +1 for "c", +1 for "d"
+                        "shared" -> 3 // +1 "b", +1 for "c", +1 for "d" ("a" has no value so it's not considered)
                         else -> throw IllegalArgumentException("Unexpected type provided: [$type]")
                     }
 
@@ -355,10 +359,11 @@ class IndexSpec : WordSpec({
                         "map-concurrent" -> MapIndex.decodedConcurrent(encoded) { it }
                         "map-custom" -> MapIndex.decodedCustom(encoded, HashMap()) { it }
                         "trie-mutable" -> TrieIndex.decoded(encoded, "/") { it }
+                        "shared" -> SharedIndex.decoded(encoded) { it }
                         else -> throw IllegalArgumentException("Unexpected type provided: [$type]")
                     }
 
-                    original should be(decodedFromEncoded)
+                    original.sameElements(decodedFromEncoded) should be(true)
                 }
 
                 "fail to decode unexpected objects" {
@@ -370,6 +375,7 @@ class IndexSpec : WordSpec({
                             "map-concurrent" -> MapIndex.decodedConcurrent(encoded) { it }
                             "map-custom" -> MapIndex.decodedCustom(encoded, HashMap()) { it }
                             "trie-mutable" -> TrieIndex.decoded(encoded, "/") { it }
+                            "shared" -> SharedIndex.decoded(encoded) { it }
                             else -> throw IllegalArgumentException("Unexpected type provided: [$type]")
                         }
                     }
@@ -395,7 +401,9 @@ class IndexSpec : WordSpec({
                     index.keys should be(original.keys)
                 }
 
-                "provide equals and hashCode support" {
+                "provide equals and hashCode support".config(enabledIf = { type != "shared" }) {
+                    // Note: SharedIndex does not provide `equals` or `hashCode`
+
                     val original = createIndex()
                     original.putAll(entries = mapOf("/a/b/c" to 1, "/a/b/d" to 2, "/a/b" to 3))
 
@@ -484,9 +492,88 @@ class IndexSpec : WordSpec({
                         "map-concurrent" -> index.toString() should be("{/a/b=3, /a/b/c=1, /a/b/d=2}")
                         "map-custom" -> index.toString() should be("{/a/b=3, /a/b/c=1, /a/b/d=2}")
                         "trie-mutable" -> index.toString() should be("{/a/b=3, /a/b/c=1, /a/b/d=2}")
+                        "shared" -> index.toString() should be("{/a/b=3, /a/b/c=1, /a/b/d=2}")
 
                         else -> throw IllegalArgumentException("Unexpected type provided: [$type]")
                     }
+                }
+
+                "provide sameElements support" {
+                    val original = createIndex()
+                    original.putAll(entries = mapOf("/a/b/c" to 1, "/a/b/d" to 2, "/a/b" to 3))
+
+                    original.size should be(3)
+                    original.get(path = "/a/b/c") should be(1)
+                    original.get(path = "/a/b/d") should be(2)
+                    original.get(path = "/a/b") should be(3)
+
+                    original.sameElements(original) should be(true)
+
+                    val same = createIndex()
+                    same.putAll(entries = original.toList().toMap()) // force a change of collection (list then map)
+
+                    same.size should be(3)
+                    same.get(path = "/a/b/c") should be(1)
+                    same.get(path = "/a/b/d") should be(2)
+                    same.get(path = "/a/b") should be(3)
+
+                    same.sameElements(same) should be(true)
+                    original.sameElements(same) should be(true)
+
+                    val other1 = createIndex()
+                    other1.putAll(entries = mapOf("/a/b/c" to 1, "/a/b/d" to 2, "/a/e" to 4))
+
+                    other1.size should be(3)
+                    other1.get(path = "/a/b/c") should be(1)
+                    other1.get(path = "/a/b/d") should be(2)
+                    other1.get(path = "/a/e") should be(4)
+
+                    other1.sameElements(other1) should be(true)
+
+                    other1.sameElements(original) should be(false)
+                    other1.sameElements(same) should be(false)
+
+                    val other2 = createIndex()
+                    other2.putAll(entries = mapOf("/a" to 5))
+
+                    other2.size should be(1)
+                    other2.get(path = "/a") should be(5)
+
+                    other2.sameElements(other2) should be(true)
+
+                    other2.sameElements(original) should be(false)
+                    other2.sameElements(same) should be(false)
+
+                    val other3 = createIndex()
+                    other3.putAll(entries = mapOf("/x" to 5))
+
+                    other3.size should be(1)
+                    other3.get(path = "/x") should be(5)
+
+                    other3.sameElements(other3) should be(true)
+
+                    other3.sameElements(original) should be(false)
+                    other3.sameElements(same) should be(false)
+
+                    other2 shouldNot be(other3)
+
+                    val other4 = createIndex()
+                    other4.putAll(entries = mapOf("/a/b/c" to 1, "/a/b/d" to 2, "/a/b" to 99))
+
+                    other4.sameElements(original) should be(false)
+                    other4.sameElements(same) should be(false)
+                    other3.sameElements(other4) should be(false)
+
+                    val indexWithDifferentType: Index<Int> = when (type) {
+                        "map-mutable", "map-concurrent", "map-custom" -> TrieIndex.mutable(separator = "/")
+                        "trie-mutable" -> SharedIndex.default()
+                        "shared" -> MapIndex.mutable()
+                        else -> throw IllegalArgumentException("Unexpected type provided: [$type]")
+                    }
+
+                    indexWithDifferentType.putAll(entries = original.toMap())
+
+                    original.sameElements(indexWithDifferentType) should be(true)
                 }
             }
         }

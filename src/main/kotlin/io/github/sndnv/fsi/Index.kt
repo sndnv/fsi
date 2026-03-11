@@ -251,6 +251,17 @@ interface Index<T> {
     fun <E> encode(f: (T) -> E): Encoded<E>
 
     /**
+     * Checks if this and the provided [other] index both contain the same elements.
+     *
+     * **Note**: Care should be taken when comparing indices of different types
+     * (Trie vs Map, for example), as intermediate collections may be created and
+     * multiple iterations over the indices may be necessary.
+     *
+     * @param other index to compare
+     */
+    fun sameElements(other: Index<*>): Boolean
+
+    /**
      * Interface providing storage information for the current index.
      *
      * @see estimatedSize

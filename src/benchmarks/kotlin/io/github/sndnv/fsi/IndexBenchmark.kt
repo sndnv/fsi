@@ -1,18 +1,20 @@
 package io.github.sndnv.fsi
 
 import io.github.sndnv.fsi.backends.MapIndex
+import io.github.sndnv.fsi.backends.SharedIndex
 import io.github.sndnv.fsi.backends.TrieIndex
 import org.openjdk.jmh.annotations.*
 
 @State(Scope.Benchmark)
 class IndexBenchmark : IndexBenchmarkSetup() {
-    @Param("map-mutable", "map-concurrent", "trie-mutable")
+    @Param("map-mutable", "map-concurrent", "trie-mutable", "shared")
     var type: String = "map-mutable"
 
     private val index: Index<Int> = when (type) {
         "map-mutable" -> MapIndex.mutable()
         "map-concurrent" -> MapIndex.concurrent()
         "trie-mutable" -> TrieIndex.mutable(separator = "/")
+        "shared" -> SharedIndex.default()
         else -> throw IllegalArgumentException("Unexpected type provided: [$type]")
     }
 
@@ -20,6 +22,14 @@ class IndexBenchmark : IndexBenchmarkSetup() {
         "map-mutable" -> MapIndex.mutable()
         "map-concurrent" -> MapIndex.concurrent()
         "trie-mutable" -> TrieIndex.mutable(separator = "/")
+        "shared" -> SharedIndex.default()
+        else -> throw IllegalArgumentException("Unexpected type provided: [$type]")
+    }
+
+    private val otherWithDifferentType: Index<Int> = when (type) {
+        "map-mutable", "map-concurrent" -> TrieIndex.mutable(separator = "/")
+        "trie-mutable" -> SharedIndex.default()
+        "shared" -> MapIndex.concurrent()
         else -> throw IllegalArgumentException("Unexpected type provided: [$type]")
     }
 
@@ -29,6 +39,7 @@ class IndexBenchmark : IndexBenchmarkSetup() {
             .forEach {
                 index.put(it, 1)
                 other.put(it, 2)
+                otherWithDifferentType.put(it, 2)
             }
     }
 
@@ -164,5 +175,15 @@ class IndexBenchmark : IndexBenchmarkSetup() {
     @Benchmark
     fun javaHashCode(): Int {
         return index.hashCode()
+    }
+
+    @Benchmark
+    fun sameElements(): Boolean {
+        return index.sameElements(other)
+    }
+
+    @Benchmark
+    fun sameElementsWithOtherIndexType(): Boolean {
+        return index.sameElements(otherWithDifferentType)
     }
 }

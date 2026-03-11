@@ -14,10 +14,15 @@ dependencies {
 
 ## Components
 
-There are currently two implementations available - a [`MapIndex`](./src/main/kotlin/io/github/sndnv/fsi/backends/MapIndex.kt)
-and a [`TrieIndex`](./src/main/kotlin/io/github/sndnv/fsi/backends/TrieIndex.kt).
+There are currently three implementations available:
 
-The main difference between them is their underlying storage - a hashmap in the case of `MapIndex`
+* [`MapIndex`](./src/main/kotlin/io/github/sndnv/fsi/backends/MapIndex.kt) - based on a hashmap
+* [`TrieIndex`](./src/main/kotlin/io/github/sndnv/fsi/backends/TrieIndex.kt) - based on a prefix tree (trie)
+* [`SharedIndex`](./src/main/kotlin/io/github/sndnv/fsi/backends/SharedIndex.kt) - using a shared `TrieIndex` as storage
+
+### `MapIndex` vs `TrieIndex`
+
+The main difference between `MapIndex` and `TrieIndex` is their underlying storage - a hashmap in the case of `MapIndex`
 and a prefix tree (trie) for `TrieIndex`. In theory, a `MapIndex` should have better performance
 for basic operations (add, remove, retrieve) but it uses more memory to store the full paths;
 versus a `TrieIndex` that has to traverse the tree to get to a node (which is slower) but stores
@@ -71,6 +76,61 @@ with each entry having a copy of `/a/b/c`, whereas in the `trie` index, it will 
 
 with the parts of `/a/b/c` being stored only once.
 
+### `SharedIndex`
+
+As for `SharedIndex`, it works by having a "shared" `TrieIndex` as storage so that a path is only ever kept in memory once, and it
+is "reused" for all instances of `SharedIndex`, thus reducing memory usage even further.
+
+For example, with the following setup:
+
+```kotlin
+// the value in the index is not relevant for this example
+val indexA = SharedIndex.default<Int>()
+val indexB = SharedIndex.default<Int>()
+
+(0 until 5).forEach { i ->
+    indexA.put("/a/b/c/$i", 1)
+    indexB.put("/a/b/c/$i", 2)
+}
+```
+
+we will have in memory (roughly):
+
+```json
+{
+  "a": {
+    "b": {
+      "c": {
+        "0": {
+          "index-a": 1,
+          "index-b": 2
+        },
+        "1": {
+          "index-a": 1,
+          "index-b": 2
+        },
+        "2": {
+          "index-a": 1,
+          "index-b": 2
+        },
+        "3": {
+          "index-a": 1,
+          "index-b": 2
+        },
+        "4": {
+          "index-a": 1,
+          "index-b": 2
+        }
+      }
+    }
+  }
+}
+```
+
+> The actual index references and values in a `SharedIndex` as stored in a `WeakHashMap`; as soon as an index instance is no
+> longer used/accessible, it is made eligible for garbage collection and will (eventually) be automatically discarded from the
+> shared storage.
+
 ## Usage
 
 Below are a few examples of how to use the `Index` API; for all available functionality, you can check the
@@ -79,7 +139,8 @@ code [here](./src/main/kotlin/io/github/sndnv/fsi/Index.kt) or go through the KD
 ### Basic Operations
 
 ```kotlin
-val index: io.github.sndnv.fsi.Index<Int> = MapIndex.mutable() // or MapIndex.concurrent() or TrieIndex.mutable(...)
+// or MapIndex.concurrent() or TrieIndex.mutable(...) or SharedIndex.default()
+val index: io.github.sndnv.fsi.Index<Int> = MapIndex.mutable()
 val path = "/a/b/c"
 
 // basic operations
@@ -101,7 +162,7 @@ index.get(path) // should return null
 #### `MapIndex`
 
 ```kotlin
-val index = MapIndex.mutable()
+val index = MapIndex.mutable<Int>()
 
 val encoded = index.encode { it.toLong() } // encoding and converting the values from Int to Long (for example)
 val decoded = MapIndex.decodedConcurrent(encoded) { it.toInt() } // decoding and converting the values from Long to Int
@@ -110,10 +171,19 @@ val decoded = MapIndex.decodedConcurrent(encoded) { it.toInt() } // decoding and
 #### `TrieIndex`
 
 ```kotlin
-val index = TrieIndex.mutable(fs)
+val index = TrieIndex.mutable<Int>(fs)
 
 val encoded = index.encode { it.toLong() } // encoding and converting the values from Int to Long (for example)
 val decoded = TrieIndex.decoded(encoded, fs) { it.toInt() } // decoding and converting the values from Long to Int
+```
+
+#### `SharedIndex`
+
+```kotlin
+val index = SharedIndex.default<Int>()
+
+val encoded = index.encode { it.toLong() } // encoding and converting the values from Int to Long (for example)
+val decoded = SharedIndex.decoded(encoded) { it.toInt() } // decoding and converting the values from Long to Int
 ```
 
 ## Development
