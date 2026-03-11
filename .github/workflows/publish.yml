@@ -1,5 +1,8 @@
 name: fsi Publish
 
+permissions:
+  contents: read
+
 on:
   push:
     tags:
