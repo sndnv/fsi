@@ -118,7 +118,7 @@ class TrieIndex<T> private constructor(val separator: String) : Index<T> {
         forEachNode { path, node ->
             val value = node.value
             if (value != null) {
-                val actualPath = path.joinToString(separator)
+                val actualPath = rebuild(path)
                 val collected = f(actualPath, value)
                 if (collected != null) {
                     result += collected
@@ -139,7 +139,7 @@ class TrieIndex<T> private constructor(val separator: String) : Index<T> {
         forEachNode { path, node ->
             val value = node.value
             if (value != null) {
-                val actualPath = path.joinToString(separator)
+                val actualPath = rebuild(path)
                 if (expr.matcher(actualPath).matches()) {
                     result[actualPath] = value
                 }
@@ -158,7 +158,7 @@ class TrieIndex<T> private constructor(val separator: String) : Index<T> {
         forEachNode { path, node ->
             val existingValue = node.value
             if (existingValue != null) {
-                val newValue = f(path.joinToString(separator), existingValue)
+                val newValue = f(rebuild(path), existingValue)
                 if (newValue != null) {
                     val node = result.getOrCreateNode(path.drop(1))
                     if (node.value == null) {
@@ -176,7 +176,7 @@ class TrieIndex<T> private constructor(val separator: String) : Index<T> {
         forEachNode { path, node ->
             val value = node.value
             if (value != null) {
-                f(path.joinToString(separator), value)
+                f(rebuild(path), value)
             }
         }
     }
@@ -185,7 +185,7 @@ class TrieIndex<T> private constructor(val separator: String) : Index<T> {
         forEachNode { path, node ->
             val value = node.value
             if (value != null) {
-                node.value = f(path.joinToString(separator), value)
+                node.value = f(rebuild(path), value)
             }
         }
     }
@@ -228,26 +228,9 @@ class TrieIndex<T> private constructor(val separator: String) : Index<T> {
 
         if (actualSize != other.actualSize) return false
 
-        val remaining: Queue<Pair<List<String>, IndexNode<T>>> = ArrayDeque()
 
-        remaining.add(listOf("") to root)
 
-        while (remaining.isNotEmpty()) {
-            val (currentPath, currentNode) = remaining.poll()
-            val otherNode = other.getNode(currentPath.drop(1))
-
-            // since the size of both instances is the same, the expectation is that, if the indices
-            // are the same, each node should exist in both and their values should be identical
-            if (otherNode == null || currentNode.value != otherNode.value) {
-                return false
-            }
-
-            currentNode.children.forEach { (childPart, childNode) ->
-                remaining.add((currentPath + childPart) to childNode)
-            }
-        }
-
-        return true
+        return sameElements(other)
     }
 
     override fun hashCode(): Int {
@@ -263,6 +246,38 @@ class TrieIndex<T> private constructor(val separator: String) : Index<T> {
 
     override fun toString(): String {
         return toMap().toString()
+    }
+
+    @Suppress("ReturnCount")
+    override fun sameElements(other: Index<*>): Boolean {
+        if (this === other) return true
+
+        when (other) {
+            is TrieIndex<*> -> {
+                val remaining: Queue<Pair<List<String>, IndexNode<T>>> = ArrayDeque()
+
+                remaining.add(listOf("") to root)
+
+                while (remaining.isNotEmpty()) {
+                    val (currentPath, currentNode) = remaining.poll()
+                    val otherNode = other.getNode(currentPath.drop(1))
+
+                    // since the size of both instances is the same, the expectation is that, if the indices
+                    // are the same, each node should exist in both and their values should be identical
+                    if (otherNode == null || currentNode.value != otherNode.value) {
+                        return false
+                    }
+
+                    currentNode.children.forEach { (childPart, childNode) ->
+                        remaining.add((currentPath + childPart) to childNode)
+                    }
+                }
+
+                return true
+            }
+
+            else -> return this.toMap() == other.toMap()
+        }
     }
 
     companion object {
@@ -370,7 +385,7 @@ class TrieIndex<T> private constructor(val separator: String) : Index<T> {
         override val children: Map<String, EncodedNode<E>>, override val value: E?
     ) : TransformableNode<E, Map<String, EncodedNode<E>>>, Index.Encoded<E>
 
-    private data class IndexNode<T>(override val children: MutableMap<String, IndexNode<T>>, override var value: T?) :
+    internal data class IndexNode<T>(override val children: MutableMap<String, IndexNode<T>>, override var value: T?) :
         TransformableNode<T, MutableMap<String, IndexNode<T>>> {
         @Suppress("EqualsAlwaysReturnsTrueOrFalse")
         override fun equals(other: Any?): Boolean = false // disabled
@@ -385,7 +400,7 @@ class TrieIndex<T> private constructor(val separator: String) : Index<T> {
     /**
      * Replaces the root node of this index.
      */
-    private fun withRoot(other: IndexNode<T>): TrieIndex<T> = apply {
+    internal fun withRoot(other: IndexNode<T>): TrieIndex<T> = apply {
         root = other
 
         actualSize = 0
@@ -402,12 +417,17 @@ class TrieIndex<T> private constructor(val separator: String) : Index<T> {
      * Blank part are removed, for example `"/a/b//c"` will be split into `listOf("a", "b", "c")`
      * and not `listOf("", "a", "b", "", "c")`.
      */
-    private fun String.parts(): List<String> = this.split(separator).filter { it.isNotBlank() }
+    internal fun String.parts(): List<String> = this.split(separator).filter { it.isNotBlank() }
+
+    /**
+     * Rebuilds the specified list of path parts into a full path, based on the provided [separator].
+     */
+    internal fun rebuild(parts: List<String>): String = parts.joinToString(separator)
 
     /**
      * Retrieves the node at the provided [path], if it exists.
      */
-    private fun getNode(path: List<String>): IndexNode<T>? {
+    internal fun getNode(path: List<String>): IndexNode<T>? {
         var last: IndexNode<T> = root
 
         path.forEach { part ->
@@ -423,7 +443,7 @@ class TrieIndex<T> private constructor(val separator: String) : Index<T> {
     /**
      * Removes and returns the node at the provided [path], if it exists.
      */
-    private fun removeNode(path: List<String>): IndexNode<T>? {
+    internal fun removeNode(path: List<String>): IndexNode<T>? {
         var last: IndexNode<T> = root
         val pathNodes: Stack<Pair<IndexNode<T>, String>> = Stack()
         var removed = false
@@ -444,7 +464,7 @@ class TrieIndex<T> private constructor(val separator: String) : Index<T> {
                 parent.children.remove(part)
                 removed = true
 
-                if (parent.children.isNotEmpty()) {
+                if (parent.value != null || parent.children.isNotEmpty()) {
                     break
                 }
             }
@@ -463,7 +483,7 @@ class TrieIndex<T> private constructor(val separator: String) : Index<T> {
     /**
      * Retrieves the node at the provided [path] or creates a new (empty) node, if it doesn't exist.
      */
-    private fun getOrCreateNode(path: List<String>): IndexNode<T> {
+    internal fun getOrCreateNode(path: List<String>): IndexNode<T> {
         var last: IndexNode<T> = root
 
         path.forEach { part ->
@@ -484,7 +504,7 @@ class TrieIndex<T> private constructor(val separator: String) : Index<T> {
     /**
      * Applies the provided function [f] to each node in the index.
      */
-    private fun forEachNode(f: (List<String>, IndexNode<T>) -> Unit) {
+    internal inline fun forEachNode(f: (List<String>, IndexNode<T>) -> Unit) {
         val remaining: Queue<Pair<List<String>, IndexNode<T>>> = ArrayDeque()
 
         remaining.add(listOf("") to root)

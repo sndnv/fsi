@@ -142,7 +142,7 @@ class MapIndex<T> private constructor(private val underlying: MutableMap<String,
 
         other as MapIndex<*>
 
-        return underlying == other.underlying
+        return sameElements(other)
     }
 
     override fun hashCode(): Int {
@@ -151,6 +151,15 @@ class MapIndex<T> private constructor(private val underlying: MutableMap<String,
 
     override fun toString(): String {
         return underlying.toString()
+    }
+
+    override fun sameElements(other: Index<*>): Boolean {
+        if (this === other) return true
+
+        return when (other) {
+            is MapIndex<*> -> underlying == other.underlying
+            else -> underlying == other.toMap()
+        }
     }
 
     inner class MapIndexStorage : Index.Storage<T> {
