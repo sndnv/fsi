@@ -1,4 +1,6 @@
+import info.solidsoft.gradle.pitest.PitestPluginExtension
 import org.gradle.api.tasks.testing.logging.TestExceptionFormat
+import java.nio.file.Paths
 
 group = "io.github.sndnv"
 version = "1.0.1-SNAPSHOT"
@@ -10,7 +12,7 @@ repositories {
 plugins {
     val versionKotlin = "2.3.10"
     val versionKotlinxBenchmark = "0.4.15"
-    val versionKotest = "6.1.2"
+    val versionKotest = "6.1.6"
 
     kotlin("jvm") version versionKotlin
     kotlin("plugin.allopen") version versionKotlin
@@ -20,6 +22,8 @@ plugins {
     id("io.gitlab.arturbosch.detekt") version "1.23.8"
     id("org.jetbrains.kotlinx.kover") version "0.9.7"
     id("com.vanniktech.maven.publish") version "0.36.0"
+
+    id("info.solidsoft.pitest") version "1.19.0-rc.3"
 }
 
 object Versions {
@@ -31,6 +35,7 @@ dependencies {
     testImplementation(kotlin("test"))
     testImplementation("io.kotest:kotest-assertions-core:${Versions.kotest}")
     testImplementation("io.kotest:kotest-runner-junit5:${Versions.kotest}")
+    testImplementation("io.kotest:kotest-extensions-pitest:${Versions.kotest}")
 }
 
 sourceSets {
@@ -89,7 +94,7 @@ allprojects {
 }
 
 tasks.register("qa") {
-    dependsOn("check", "koverPrintCoverage", "koverVerify", "koverHtmlReport")
+    dependsOn("check", "koverPrintCoverage", "koverVerify", "koverHtmlReport", "pitest")
 }
 
 kover {
@@ -144,4 +149,14 @@ mavenPublishing {
             developerConnection = "scm:git:ssh://git@github.com/sndnv/fsi.git"
         }
     }
+}
+
+configure<PitestPluginExtension> {
+    targetClasses = listOf("io.github.sndnv.fsi*")
+    avoidCallsTo = listOf("kotlin.jvm.internal")
+
+    mutationThreshold = 80
+    testStrengthThreshold = 90
+
+    reportDir = Paths.get("build/pitest").toFile()
 }

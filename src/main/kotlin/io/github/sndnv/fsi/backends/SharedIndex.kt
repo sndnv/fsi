@@ -189,11 +189,6 @@ class SharedIndex<T> internal constructor(internal val parent: SharedIndexStore)
             return result
         }
 
-        @Volatile
-        private var defaultSharedIndexStore: SharedIndexStore? = null
-
-        private val separator: String = FileSystems.getDefault().separator
-
         /**
          * Creates or provides the default [SharedIndexStore].
          */
@@ -203,6 +198,15 @@ class SharedIndex<T> internal constructor(internal val parent: SharedIndexStore)
                     ?: SharedIndexStore(separator = separator)
                         .also { defaultSharedIndexStore = it }
             }
+
+        @Volatile
+        private var defaultSharedIndexStore: SharedIndexStore? = null
+
+        internal fun removeDefaultSharedIndexStore() {
+            defaultSharedIndexStore = null
+        }
+
+        private val separator: String = FileSystems.getDefault().separator
     }
 
     inner class SharedIndexStorage : Index.Storage<T> {

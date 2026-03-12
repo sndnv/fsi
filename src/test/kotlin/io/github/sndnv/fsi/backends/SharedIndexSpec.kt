@@ -5,10 +5,21 @@ import io.kotest.assertions.withClue
 import io.kotest.core.spec.style.WordSpec
 import io.kotest.matchers.be
 import io.kotest.matchers.should
+import io.kotest.matchers.shouldNot
 import java.util.regex.Pattern
 
 class SharedIndexSpec : WordSpec({
     "A SharedIndex" should {
+        "provide a default SharedIndexStore" {
+            SharedIndex.removeDefaultSharedIndexStore()
+            val a = SharedIndex.getDefaultSharedIndexStore()
+
+            SharedIndex.removeDefaultSharedIndexStore()
+            val b = SharedIndex.getDefaultSharedIndexStore()
+
+            a shouldNot be(b)
+        }
+
         "support storage sharing" {
             val parent = SharedIndex.SharedIndexStore(separator = "/")
 
