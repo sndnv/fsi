@@ -11,6 +11,7 @@ import io.kotest.matchers.be
 import io.kotest.matchers.should
 import io.kotest.matchers.shouldNot
 import io.kotest.matchers.string.shouldContain
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.regex.Pattern
 
 class IndexSpec : WordSpec({
@@ -75,8 +76,8 @@ class IndexSpec : WordSpec({
                     }
 
                     withClue("putAllKeysWithF") {
-                        index.putAll(paths = listOf("/a/b/c", "/a/b/g")) { path, existing ->
-                            if (path == "/a/b/c") {
+                        index.putAll(paths = listOf("/a/b/c", "/a/b/d", "/a/b/g")) { path, existing ->
+                            if (path == "/a/b/c" || path == "/a/b/d") {
                                 (existing ?: 0) + 1
                             } else {
                                 999
@@ -85,7 +86,7 @@ class IndexSpec : WordSpec({
 
                         index.size should be(6)
                         index.get(path = "/a/b/c") should be(3)
-                        index.get(path = "/a/b/d") should be(1)
+                        index.get(path = "/a/b/d") should be(2)
                         index.get(path = "/a/b/e") should be(1)
                         index.get(path = "/a/b/g") should be(999)
                         index.get(path = "/a/b") should be(1)
@@ -188,9 +189,17 @@ class IndexSpec : WordSpec({
                     }
 
                     withClue("clear") {
-                        index.clear()
+                        index.putAll(entries = mapOf("/a/b/c" to 1, "/a/b/d" to 1, "/a/b" to 1, "/" to 99))
+                        index.size should be(4)
 
+                        val count = AtomicInteger(0)
+
+                        index.clear()
                         index.size should be(0)
+
+                        index.forEach { _, _ -> count.incrementAndGet() }
+                        count.get() should be(0)
+                        index.get("/") should be(null)
                     }
                 }
 

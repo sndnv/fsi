@@ -41,6 +41,12 @@ import java.util.regex.Pattern
  * @see MapIndex
  */
 class TrieIndex<T> private constructor(val separator: String) : Index<T> {
+    init {
+        require(separator.isNotBlank()) {
+            "A non-empty separator must be provided but [$separator] found"
+        }
+    }
+
     private var root: IndexNode<T> = IndexNode(children = mutableMapOf(), value = null)
     private var actualSize: Int = 0
 
@@ -443,14 +449,14 @@ class TrieIndex<T> private constructor(val separator: String) : Index<T> {
     /**
      * Removes and returns the node at the provided [path], if it exists.
      */
-    internal fun removeNode(path: List<String>): IndexNode<T>? {
+    internal fun removeNode(path: List<String>) {
         var last: IndexNode<T> = root
         val pathNodes: Stack<Pair<IndexNode<T>, String>> = Stack()
         var removed = false
 
         path.forEach { part ->
             when (val child = last.children[part]) {
-                null -> return null
+                null -> return
                 else -> {
                     pathNodes.push(last to part)
                     last = child
@@ -476,8 +482,6 @@ class TrieIndex<T> private constructor(val separator: String) : Index<T> {
         if (removed) {
             actualSize -= 1
         }
-
-        return last
     }
 
     /**
