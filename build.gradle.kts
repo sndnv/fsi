@@ -1,4 +1,5 @@
 import info.solidsoft.gradle.pitest.PitestPluginExtension
+import org.cyclonedx.model.ExternalReference
 import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 import java.nio.file.Paths
 
@@ -24,6 +25,8 @@ plugins {
     id("com.vanniktech.maven.publish") version "0.36.0"
 
     id("info.solidsoft.pitest") version "1.19.0-rc.3"
+
+    id("org.cyclonedx.bom") version "3.2.3"
 }
 
 object Versions {
@@ -129,6 +132,7 @@ mavenPublishing {
         description = "Library providing simple data structures for efficiently associating information with file system paths"
         inceptionYear = "2026"
         url = "https://github.com/sndnv/fsi"
+
         licenses {
             license {
                 name = "The Apache License, Version 2.0"
@@ -136,6 +140,7 @@ mavenPublishing {
                 distribution = "https://www.apache.org/licenses/LICENSE-2.0.txt"
             }
         }
+
         developers {
             developer {
                 id = "sndnv"
@@ -143,6 +148,7 @@ mavenPublishing {
                 url = "https://github.com/sndnv"
             }
         }
+
         scm {
             url = "https://github.com/sndnv/fsi"
             connection = "scm:git:git://github.com/sndnv/fsi.git"
@@ -159,4 +165,29 @@ configure<PitestPluginExtension> {
     testStrengthThreshold = 90
 
     reportDir = Paths.get("build/pitest").toFile()
+}
+
+tasks.cyclonedxDirectBom {
+    includeConfigs = listOf("runtimeClasspath", "compileClasspath")
+    skipConfigs = listOf("testRuntimeClasspath", "testCompileClasspath")
+
+    externalReferences = listOf(
+        ExternalReference().apply {
+            url = "https://github.com/sndnv/fsi.git"
+            type = ExternalReference.Type.VCS
+        }
+    )
+}
+
+afterEvaluate {
+    val cyclonedxTask = tasks.cyclonedxDirectBom.get()
+    val jsonFile = cyclonedxTask.jsonOutput.get().asFile
+
+    publishing.publications.withType<MavenPublication>().configureEach {
+        artifact(jsonFile) {
+            classifier = "cyclonedx"
+            extension = "json"
+            builtBy(cyclonedxTask)
+        }
+    }
 }
