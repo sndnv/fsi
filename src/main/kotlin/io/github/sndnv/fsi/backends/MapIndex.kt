@@ -94,7 +94,7 @@ class MapIndex<T> private constructor(private val underlying: MutableMap<String,
     }
 
     override fun filter(f: (String, T) -> Boolean): MapIndex<T> {
-        return MapIndex(underlying.filter { f(it.key, it.value) }.toMutableMap())
+        return MapIndex(underlying.filter { f(it.key, it.value) }.toMap(emptyDestination()))
     }
 
     override fun search(expr: Pattern): Map<String, T> {
@@ -106,7 +106,7 @@ class MapIndex<T> private constructor(private val underlying: MutableMap<String,
 
     override fun <S> mapValuesNotNull(f: (String, T) -> S?): MapIndex<S> {
         return MapIndex(underlying = underlying.mapNotNull { (key, value) -> f(key, value)?.let { key to it } }
-            .toMap(mutableMapOf()))
+            .toMap(emptyDestination()))
     }
 
     override fun forEach(f: (String, T) -> Unit) {
@@ -160,6 +160,11 @@ class MapIndex<T> private constructor(private val underlying: MutableMap<String,
             is MapIndex<*> -> underlying == other.underlying
             else -> underlying == other.toMap()
         }
+    }
+
+    private fun <V> emptyDestination(): MutableMap<String, V> = when (underlying) {
+        is ConcurrentHashMap -> ConcurrentHashMap()
+        else -> LinkedHashMap()
     }
 
     inner class MapIndexStorage : Index.Storage<T> {
