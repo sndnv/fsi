@@ -1,6 +1,8 @@
 package io.github.sndnv.fsi.backends
 
 import io.github.sndnv.fsi.Index
+import io.github.sndnv.fsi.SchemeMapper
+import io.github.sndnv.fsi.Schemes
 import io.github.sndnv.fsi.backends.SharedIndex.Companion.custom
 import io.github.sndnv.fsi.backends.SharedIndex.Companion.default
 import java.nio.file.FileSystems
@@ -182,7 +184,7 @@ class SharedIndex<T> internal constructor(internal val parent: SharedIndexStore)
         fun <T, E> decodedCustom(encoded: Index.Encoded<E>, store: SharedIndexStore, f: (E) -> T): SharedIndex<T> {
             val result = SharedIndex<T>(parent = store)
 
-            TrieIndex.decoded(encoded, separator, f).forEach { path, node ->
+            TrieIndex.decoded(encoded, store.storage.separator, f).forEach { path, node ->
                 result.put(path, node)
             }
 
@@ -370,10 +372,18 @@ class SharedIndex<T> internal constructor(internal val parent: SharedIndexStore)
 
         companion object {
             /**
-             * Creates a new [SharedIndexStore] with the provided [separator].
+             * Creates a new [SharedIndexStore] with the provided [separator], preserving path schemes.
              */
             operator fun invoke(separator: String): SharedIndexStore =
-                SharedIndexStore(storage = TrieIndex.mutable(separator))
+                invoke(separator = separator, schemeMapper = Schemes.Identity)
+
+            /**
+             * Creates a new [SharedIndexStore] with the provided [separator] and [schemeMapper].
+             *
+             * All [SharedIndex] instances backed by this store share its [schemeMapper] (see [Schemes]).
+             */
+            operator fun invoke(separator: String, schemeMapper: SchemeMapper): SharedIndexStore =
+                SharedIndexStore(storage = TrieIndex.mutable(separator, schemeMapper))
         }
 
         /**
@@ -391,7 +401,7 @@ class SharedIndex<T> internal constructor(internal val parent: SharedIndexStore)
 
                 val value = node.value
                 if (value != null && value.values.isEmpty()) {
-                    this.removeNode(parts.filter { it.isNotBlank() })
+                    this.removeNode(parts)
                 }
             }
         }

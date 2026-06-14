@@ -6,6 +6,7 @@ import io.kotest.core.spec.style.WordSpec
 import io.kotest.matchers.be
 import io.kotest.matchers.should
 import io.kotest.matchers.shouldNot
+import java.lang.ref.WeakReference
 import java.util.regex.Pattern
 
 class SharedIndexSpec : WordSpec({
@@ -140,7 +141,7 @@ class SharedIndexSpec : WordSpec({
                 index3.put(path = "/a/b", value = 3)
                 index1.put(path = "/a/b", value = 4)
 
-                System.gc()
+                forceGc()
                 parent.trimNodes()
 
                 parent.storage.size should be(2)
@@ -165,7 +166,7 @@ class SharedIndexSpec : WordSpec({
             }
 
             withClue("preserve indices with valid references") {
-                System.gc()
+                forceGc()
                 parent.trimNodes()
 
                 parent.storage.size should be(2)
@@ -192,7 +193,7 @@ class SharedIndexSpec : WordSpec({
             withClue("discard index1 after its reference is removed") {
                 index1 = null
 
-                System.gc()
+                forceGc()
                 parent.trimNodes()
 
                 parent.storage.size should be(2)
@@ -217,7 +218,7 @@ class SharedIndexSpec : WordSpec({
             withClue("discard index2 after its reference is removed") {
                 index2 = null
 
-                System.gc()
+                forceGc()
                 parent.trimNodes()
 
                 parent.storage.size should be(1)
@@ -236,7 +237,7 @@ class SharedIndexSpec : WordSpec({
             withClue("discard index3 after its reference is removed") {
                 index3 = null
 
-                System.gc()
+                forceGc()
                 parent.trimNodes()
 
                 parent.storage.size should be(0)
@@ -245,5 +246,40 @@ class SharedIndexSpec : WordSpec({
                 parent.storage.get(path = "/a/b") should be(null)
             }
         }
+
+        "trim emptied nodes deterministically (without relying on garbage collection)" {
+            val parent = SharedIndex.SharedIndexStore(separator = "/")
+            val index = SharedIndex.custom<Int>(store = parent)
+
+            index.put(path = "/a/b/c", value = 1)
+            index.put(path = "/a/b/d", value = 2)
+            parent.storage.size should be(2)
+
+            withClue("removing the last value for a node trims it on the next pass") {
+                index.remove(path = "/a/b/c")
+                parent.trimNodes()
+
+                parent.storage.size should be(1)
+                parent.storage.get(path = "/a/b/c") should be(null)
+                parent.storage.get(path = "/a/b/d")?.values?.size should be(1)
+            }
+
+            withClue("clearing the index trims all of its nodes") {
+                index.clear()
+                parent.trimNodes()
+
+                parent.storage.size should be(0)
+                parent.storage.get(path = "/a/b/d") should be(null)
+            }
+        }
     }
 })
+
+private fun forceGc() {
+    repeat(3) {
+        val ref = WeakReference(Any())
+        while (ref.get() != null) {
+            System.gc()
+        }
+    }
+}

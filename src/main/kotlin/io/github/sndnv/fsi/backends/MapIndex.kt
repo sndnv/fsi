@@ -1,6 +1,8 @@
 package io.github.sndnv.fsi.backends
 
 import io.github.sndnv.fsi.Index
+import io.github.sndnv.fsi.SchemeMapper
+import io.github.sndnv.fsi.Schemes
 import io.github.sndnv.fsi.backends.MapIndex.Companion.concurrent
 import io.github.sndnv.fsi.backends.MapIndex.Companion.custom
 import io.github.sndnv.fsi.backends.MapIndex.Companion.mutable
@@ -34,12 +36,18 @@ import java.util.regex.Pattern
  *   encoded should be(decoded)
  * ```
  *
+ * **Note:** Keys are stored unchanged - unlike [TrieIndex], a [MapIndex] has no separator and does not
+ * normalize paths, so `a/b/c` and `/a/b/c` are distinct keys.
+ *
  * @see mutable
  * @see concurrent
  * @see custom
  * @see TrieIndex
  */
-class MapIndex<T> private constructor(private val underlying: MutableMap<String, T>) : Index<T> {
+class MapIndex<T> private constructor(
+    private val underlying: MutableMap<String, T>,
+    private val schemeMapper: SchemeMapper
+) : Index<T> {
     override val size: Int
         get() = underlying.size
 
@@ -49,15 +57,15 @@ class MapIndex<T> private constructor(private val underlying: MutableMap<String,
         get() = underlying.keys
 
     override fun get(path: String): T? {
-        return underlying[path]
+        return underlying[normalize(path)]
     }
 
     override fun put(path: String, value: T): MapIndex<T> = apply {
-        underlying[path] = value
+        underlying[normalize(path)] = value
     }
 
     override fun put(path: String, value: T, f: (String, T?, T) -> T): MapIndex<T> = apply {
-        underlying.compute(path) { _, existing -> f(path, existing, value) }
+        underlying.compute(normalize(path)) { _, existing -> f(path, existing, value) }
     }
 
     override fun putAll(entries: Map<String, T>): MapIndex<T> =
@@ -67,20 +75,20 @@ class MapIndex<T> private constructor(private val underlying: MutableMap<String,
         entries: Map<String, S>, f: (String, T?, S) -> T
     ): MapIndex<T> = apply {
         entries.forEach { (path, otherValue) ->
-            underlying.compute(path) { _, existingValue -> f(path, existingValue, otherValue) }
+            underlying.compute(normalize(path)) { _, existingValue -> f(path, existingValue, otherValue) }
         }
     }
 
     override fun putAll(paths: Iterable<String>, f: (String, T?) -> T): MapIndex<T> = apply {
-        paths.forEach { path -> underlying.compute(path, f) }
+        paths.forEach { path -> underlying.compute(normalize(path)) { _, existing -> f(path, existing) } }
     }
 
     override fun remove(path: String): MapIndex<T> = apply {
-        underlying.remove(path)
+        underlying.remove(normalize(path))
     }
 
     override fun contains(path: String): Boolean {
-        return underlying.contains(path)
+        return underlying.contains(normalize(path))
     }
 
     override fun clear(): MapIndex<T> = apply {
@@ -94,7 +102,7 @@ class MapIndex<T> private constructor(private val underlying: MutableMap<String,
     }
 
     override fun filter(f: (String, T) -> Boolean): MapIndex<T> {
-        return MapIndex(underlying.filter { f(it.key, it.value) }.toMap(emptyDestination()))
+        return MapIndex(underlying.filter { f(it.key, it.value) }.toMap(emptyDestination()), schemeMapper)
     }
 
     override fun search(expr: Pattern): Map<String, T> {
@@ -106,7 +114,7 @@ class MapIndex<T> private constructor(private val underlying: MutableMap<String,
 
     override fun <S> mapValuesNotNull(f: (String, T) -> S?): MapIndex<S> {
         return MapIndex(underlying = underlying.mapNotNull { (key, value) -> f(key, value)?.let { key to it } }
-            .toMap(emptyDestination()))
+            .toMap(emptyDestination()), schemeMapper = schemeMapper)
     }
 
     override fun forEach(f: (String, T) -> Unit) {
@@ -167,6 +175,13 @@ class MapIndex<T> private constructor(private val underlying: MutableMap<String,
         else -> LinkedHashMap()
     }
 
+    private fun normalize(path: String): String {
+        if (schemeMapper === Schemes.Identity) return path
+        val (rawScheme, rest) = Schemes.split(path)
+        val scheme = schemeMapper(rawScheme)
+        return if (scheme.isNullOrEmpty()) rest else "$scheme${Schemes.Delimiter}$rest"
+    }
+
     inner class MapIndexStorage : Index.Storage<T> {
         override fun estimatedSize(sizeOf: (T) -> Long): Long =
             underlying.map { it.key.toByteArray().size + sizeOf(it.value) }.sum()
@@ -183,35 +198,61 @@ class MapIndex<T> private constructor(private val underlying: MutableMap<String,
 
     companion object {
         /**
-         * Creates a new [MapIndex] using a [ConcurrentHashMap] as the underlying storage.
+         * Creates a new [MapIndex] using a [ConcurrentHashMap] as the underlying storage, preserving path schemes.
          */
         @JvmStatic
-        fun <T> concurrent(): MapIndex<T> = MapIndex(
-            underlying = ConcurrentHashMap()
+        fun <T> concurrent(): MapIndex<T> = concurrent(schemeMapper = Schemes.Identity)
+
+        /**
+         * Creates a new [MapIndex] using a [ConcurrentHashMap] as the underlying storage and the provided
+         * [schemeMapper] (see [Schemes]).
+         */
+        @JvmStatic
+        fun <T> concurrent(schemeMapper: SchemeMapper): MapIndex<T> = MapIndex(
+            underlying = ConcurrentHashMap(), schemeMapper = schemeMapper
         )
 
         /**
-         * Creates a new [MapIndex] using a [LinkedHashMap] as the underlying storage.
+         * Creates a new [MapIndex] using a [LinkedHashMap] as the underlying storage, preserving path schemes.
          *
          * **Note:** This implementation is not thread-safe.
          */
         @JvmStatic
-        fun <T> mutable(): MapIndex<T> = MapIndex(
-            underlying = LinkedHashMap()
+        fun <T> mutable(): MapIndex<T> = mutable(schemeMapper = Schemes.Identity)
+
+        /**
+         * Creates a new [MapIndex] using a [LinkedHashMap] as the underlying storage and the provided
+         * [schemeMapper] (see [Schemes]).
+         *
+         * **Note:** This implementation is not thread-safe.
+         */
+        @JvmStatic
+        fun <T> mutable(schemeMapper: SchemeMapper): MapIndex<T> = MapIndex(
+            underlying = LinkedHashMap(), schemeMapper = schemeMapper
         )
 
         /**
-         * Creates a new [MapIndex] using the provided underlying storage.
+         * Creates a new [MapIndex] using the provided underlying storage, preserving path schemes.
          *
          * @param map underlying storage
          */
         @JvmStatic
-        fun <T> custom(map: MutableMap<String, T>): MapIndex<T> = MapIndex(
-            underlying = map
+        fun <T> custom(map: MutableMap<String, T>): MapIndex<T> = custom(map = map, schemeMapper = Schemes.Identity)
+
+        /**
+         * Creates a new [MapIndex] using the provided underlying storage and [schemeMapper] (see [Schemes]).
+         *
+         * @param map underlying storage
+         * @param schemeMapper function for canonicalizing path schemes
+         */
+        @JvmStatic
+        fun <T> custom(map: MutableMap<String, T>, schemeMapper: SchemeMapper): MapIndex<T> = MapIndex(
+            underlying = map, schemeMapper = schemeMapper
         )
 
         /**
-         * Decodes the provided [encoded] index using the specified function [f] for mapping the encoded values.
+         * Decodes the provided [encoded] index using the specified function [f] for mapping the encoded values,
+         * preserving path schemes.
          *
          * @param encoded the encoded index
          * @param f value decoding function
@@ -220,12 +261,27 @@ class MapIndex<T> private constructor(private val underlying: MutableMap<String,
          */
         @JvmStatic
         fun <T, E> decodedConcurrent(encoded: Index.Encoded<E>, f: (E) -> T): MapIndex<T> =
+            decodedConcurrent(encoded = encoded, schemeMapper = Schemes.Identity, f = f)
+
+        /**
+         * Decodes the provided [encoded] index using the specified function [f] for mapping the encoded values
+         * and the provided [schemeMapper] (see [Schemes]).
+         *
+         * @param encoded the encoded index
+         * @param schemeMapper function for canonicalizing path schemes
+         * @param f value decoding function
+         *
+         * @see concurrent
+         */
+        @JvmStatic
+        fun <T, E> decodedConcurrent(encoded: Index.Encoded<E>, schemeMapper: SchemeMapper, f: (E) -> T): MapIndex<T> =
             requireEncoded(encoded) { actual ->
-                MapIndex(underlying = actual.entries.mapValues { f(it.value) }.toMap(ConcurrentHashMap()))
+                MapIndex(actual.entries.mapValues { f(it.value) }.toMap(ConcurrentHashMap()), schemeMapper)
             }
 
         /**
-         * Decodes the provided [encoded] index using the specified function [f] for mapping the encoded values.
+         * Decodes the provided [encoded] index using the specified function [f] for mapping the encoded values,
+         * preserving path schemes.
          *
          * @param encoded the encoded index
          * @param f value decoding function
@@ -234,12 +290,27 @@ class MapIndex<T> private constructor(private val underlying: MutableMap<String,
          */
         @JvmStatic
         fun <T, E> decodedMutable(encoded: Index.Encoded<E>, f: (E) -> T): MapIndex<T> =
+            decodedMutable(encoded = encoded, schemeMapper = Schemes.Identity, f = f)
+
+        /**
+         * Decodes the provided [encoded] index using the specified function [f] for mapping the encoded values
+         * and the provided [schemeMapper] (see [Schemes]).
+         *
+         * @param encoded the encoded index
+         * @param schemeMapper function for canonicalizing path schemes
+         * @param f value decoding function
+         *
+         * @see mutable
+         */
+        @JvmStatic
+        fun <T, E> decodedMutable(encoded: Index.Encoded<E>, schemeMapper: SchemeMapper, f: (E) -> T): MapIndex<T> =
             requireEncoded(encoded) { actual ->
-                MapIndex(underlying = actual.entries.mapValues { f(it.value) }.toMutableMap())
+                MapIndex(actual.entries.mapValues { f(it.value) }.toMutableMap(), schemeMapper)
             }
 
         /**
-         * Decodes the provided [encoded] index using the specified function [f] for mapping the encoded values.
+         * Decodes the provided [encoded] index using the specified function [f] for mapping the encoded values,
+         * preserving path schemes.
          *
          * @param encoded the encoded index
          * @param destination underlying storage
@@ -249,8 +320,25 @@ class MapIndex<T> private constructor(private val underlying: MutableMap<String,
          */
         @JvmStatic
         fun <T, E> decodedCustom(encoded: Index.Encoded<E>, destination: MutableMap<String, T>, f: (E) -> T): MapIndex<T> =
+            decodedCustom(encoded = encoded, destination = destination, schemeMapper = Schemes.Identity, f = f)
+
+        /**
+         * Decodes the provided [encoded] index using the specified function [f] for mapping the encoded values
+         * and the provided [schemeMapper] (see [Schemes]).
+         *
+         * @param encoded the encoded index
+         * @param destination underlying storage
+         * @param schemeMapper function for canonicalizing path schemes
+         * @param f value decoding function
+         *
+         * @see custom
+         */
+        @JvmStatic
+        fun <T, E> decodedCustom(
+            encoded: Index.Encoded<E>, destination: MutableMap<String, T>, schemeMapper: SchemeMapper, f: (E) -> T
+        ): MapIndex<T> =
             requireEncoded(encoded) { actual ->
-                MapIndex(underlying = actual.entries.mapValues { f(it.value) }.toMap(destination))
+                MapIndex(actual.entries.mapValues { f(it.value) }.toMap(destination), schemeMapper)
             }
 
         private fun <E, T> requireEncoded(encoded: Index.Encoded<E>, f: (Encoded<E>) -> T): T =

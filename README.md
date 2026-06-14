@@ -131,6 +131,62 @@ we will have in memory (roughly):
 > longer used/accessible, it is made eligible for garbage collection and will (eventually) be automatically discarded from the
 > shared storage.
 
+## Path Schemes
+
+Paths may be _scheme-qualified_, allowing a single index to hold both local file-system paths and logical
+entities from non-file-system libraries:
+
+```kotlin
+val index = MapIndex.mutable<Int>() // or TrieIndex / SharedIndex
+
+index.put("/a/b/c", 1)        // a local path
+index.put("photos:/a/b/c", 2) // a logical "photos" entity
+index.put("music:/a/b/c", 3)  // a logical "music" entity
+
+index.get("/a/b/c")        // 1
+index.get("photos:/a/b/c") // 2 - distinct from the local path
+```
+
+A scheme is the part before the first `:`; it must start with a letter and be at least two characters long.
+This means single-character Windows drive letters (`C:\...`), numeric prefixes (`12:30`) and absolute local
+paths (`/a/b`) are **not** treated as schemes. Scheme detection does not depend on the path separator, so all
+index implementations recognize schemes identically.
+
+### Scheme mapping
+
+By default, schemes are preserved - what you put is exactly what you get back. To canonicalize
+schemes, provide a [`SchemeMapper`](./src/main/kotlin/io/github/sndnv/fsi/Schemes.kt) - a `(String?) -> String?`
+function applied to the parsed scheme (with `null` meaning "no scheme") - at construction:
+
+```kotlin
+// treat `fs` and `file` as the local/schemeless file system
+val index = TrieIndex.mutable<Int>(separator = "/", schemeMapper = Schemes.aliases("fs", "file"))
+
+index.put("fs:/a/b/c", 1)
+index.get("/a/b/c")        // 1 - `fs:` was stripped
+index.get("file:/a/b/c")   // 1 - `file:` maps to the same path
+index.get("photos:/a/b/c") // null - other schemes are still distinct
+```
+
+The mapper is configured per-index and applies consistently across all backends. A few mappers are provided
+out of the box: `Schemes.Identity` (the default), `Schemes.aliases(...)` and `Schemes.Lowercase`.
+
+## Path normalization
+
+Paths are treated as **absolute**. `TrieIndex` and `SharedIndex` normalize each path - redundant and trailing
+separators are collapsed and a leading separator is always present - so, for example, `a/b/c`, `/a//b/c` and
+`/a/b/c/` all refer to the same entry (`/a/b/c`):
+
+```kotlin
+val trie = TrieIndex.mutable<Int>(separator = "/")
+trie.put("a/b/c", 1)
+trie.keys // ["/a/b/c"]
+```
+
+`MapIndex` stores keys directly (it has no separator), so it does not perform this normalization - there,
+`a/b/c` and `/a/b/c` are distinct keys. If you need identical behavior across all backends, pass already
+normalized, absolute paths.
+
 ## Usage
 
 Below are a few examples of how to use the `Index` API; for all available functionality, you can check the
