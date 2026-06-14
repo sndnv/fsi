@@ -257,6 +257,11 @@ interface Index<T> {
      * (Trie vs Map, for example), as intermediate collections may be created and
      * multiple iterations over the indices may be necessary.
      *
+     * **Note**: Comparison is based on the entries each index actually stores (that is, on the already
+     * scheme-canonicalized paths); the configured scheme mapper itself is not considered. Two indices built
+     * with different scheme mappers may therefore compare equal while still resolving the same input path
+     * differently.
+     *
      * @param other index to compare
      */
     fun sameElements(other: Index<*>): Boolean

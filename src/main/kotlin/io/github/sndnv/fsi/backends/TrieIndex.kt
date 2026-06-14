@@ -1,6 +1,8 @@
 package io.github.sndnv.fsi.backends
 
 import io.github.sndnv.fsi.Index
+import io.github.sndnv.fsi.SchemeMapper
+import io.github.sndnv.fsi.Schemes
 import io.github.sndnv.fsi.backends.TrieIndex.Companion.mutable
 import java.util.*
 import java.util.regex.Pattern
@@ -37,13 +39,22 @@ import java.util.regex.Pattern
  *   encoded should be(decoded)
  * ```
  *
+ * **Note:** Paths are treated as absolute and normalized - redundant and trailing separators are collapsed
+ * and a leading separator is always present, so `a/b/c`, `/a//b/c` and `/a/b/c/` all refer to `/a/b/c`.
+ *
  * @see mutable
  * @see MapIndex
  */
-class TrieIndex<T> private constructor(val separator: String) : Index<T> {
+class TrieIndex<T> private constructor(
+    val separator: String,
+    private val schemeMapper: SchemeMapper
+) : Index<T> {
     init {
         require(separator.isNotBlank()) {
             "A non-empty separator must be provided but [$separator] found"
+        }
+        require(separator != Schemes.Delimiter) {
+            "The separator must not be the scheme delimiter [${Schemes.Delimiter}]"
         }
     }
 
@@ -159,14 +170,14 @@ class TrieIndex<T> private constructor(val separator: String) : Index<T> {
         mapValuesNotNull(f = f)
 
     override fun <S> mapValuesNotNull(f: (String, T) -> S?): TrieIndex<S> {
-        val result = TrieIndex<S>(separator)
+        val result = TrieIndex<S>(separator, schemeMapper)
 
         forEachNode { path, node ->
             val existingValue = node.value
             if (existingValue != null) {
                 val newValue = f(rebuild(path), existingValue)
                 if (newValue != null) {
-                    val node = result.getOrCreateNode(path.drop(1))
+                    val node = result.getOrCreateNode(path)
                     if (node.value == null) {
                         result.actualSize += 1
                     }
@@ -288,17 +299,31 @@ class TrieIndex<T> private constructor(val separator: String) : Index<T> {
 
     companion object {
         /**
-         * Creates a new mutable [TrieIndex] using the provided [separator].
+         * Creates a new mutable [TrieIndex] using the provided [separator], preserving path schemes.
          *
          * **Note:** This implementation is not thread-safe.
          *
          * @param separator file system path separator
          */
         @JvmStatic
-        fun <T> mutable(separator: String): TrieIndex<T> = TrieIndex(separator = separator)
+        fun <T> mutable(separator: String): TrieIndex<T> =
+            mutable(separator = separator, schemeMapper = Schemes.Identity)
 
         /**
-         * Decodes the provided [encoded] index using the specified function [f] for mapping the encoded values.
+         * Creates a new mutable [TrieIndex] using the provided [separator] and [schemeMapper].
+         *
+         * **Note:** This implementation is not thread-safe.
+         *
+         * @param separator file system path separator
+         * @param schemeMapper function for canonicalizing path schemes (see [Schemes])
+         */
+        @JvmStatic
+        fun <T> mutable(separator: String, schemeMapper: SchemeMapper): TrieIndex<T> =
+            TrieIndex(separator = separator, schemeMapper = schemeMapper)
+
+        /**
+         * Decodes the provided [encoded] index using the specified function [f] for mapping the encoded values,
+         * preserving path schemes.
          *
          * @param encoded the encoded index
          * @param separator file system path separator
@@ -306,8 +331,22 @@ class TrieIndex<T> private constructor(val separator: String) : Index<T> {
          */
         @JvmStatic
         fun <E, T> decoded(encoded: Index.Encoded<E>, separator: String, f: (E) -> T): TrieIndex<T> =
+            decoded(encoded = encoded, separator = separator, schemeMapper = Schemes.Identity, f = f)
+
+        /**
+         * Decodes the provided [encoded] index using the specified function [f] for mapping the encoded values.
+         *
+         * @param encoded the encoded index
+         * @param separator file system path separator
+         * @param schemeMapper function for canonicalizing path schemes (see [Schemes])
+         * @param f value decoding function
+         */
+        @JvmStatic
+        fun <E, T> decoded(
+            encoded: Index.Encoded<E>, separator: String, schemeMapper: SchemeMapper, f: (E) -> T
+        ): TrieIndex<T> =
             requireEncoded(encoded) { actual ->
-                TrieIndex<T>(separator = separator).withRoot(
+                TrieIndex<T>(separator = separator, schemeMapper = schemeMapper).withRoot(
                     other = transform(
                         source = actual,
                         convertChildMap = { it.toMutableMap() },
@@ -420,15 +459,31 @@ class TrieIndex<T> private constructor(val separator: String) : Index<T> {
     /**
      * Splits this path string into its parts, based on the provided [separator].
      *
-     * Blank part are removed, for example `"/a/b//c"` will be split into `listOf("a", "b", "c")`
-     * and not `listOf("", "a", "b", "", "c")`.
+     * The first element is always the (mapped) scheme of the path - blank for a schemeless/local path - so
+     * that the scheme becomes the top-most level of the tree. The remaining elements are the path segments,
+     * with blank segments removed; for example `"photos:/a/b//c"` is split into `listOf("photos", "a", "b", "c")`
+     * and `"/a/b/c"` into `listOf("", "a", "b", "c")`.
+     *
+     * @see rebuild
      */
-    internal fun String.parts(): List<String> = this.split(separator).filter { it.isNotBlank() }
+    internal fun String.parts(): List<String> {
+        val (rawScheme, rest) = Schemes.split(this)
+        val scheme = schemeMapper(rawScheme) ?: ""
+        return listOf(scheme) + rest.split(separator).filter { it.isNotBlank() }
+    }
 
     /**
-     * Rebuilds the specified list of path parts into a full path, based on the provided [separator].
+     * Rebuilds the specified list of path parts (as produced by [parts]) into a full path, based on the
+     * provided [separator]. The first element is treated as the scheme.
+     *
+     * @see parts
      */
-    internal fun rebuild(parts: List<String>): String = parts.joinToString(separator)
+    internal fun rebuild(parts: List<String>): String {
+        if (parts.isEmpty()) return separator
+        val scheme = parts.first()
+        val body = separator + parts.drop(1).joinToString(separator)
+        return if (scheme.isEmpty()) body else "$scheme${Schemes.Delimiter}$body"
+    }
 
     /**
      * Retrieves the node at the provided [path], if it exists.
@@ -511,7 +566,7 @@ class TrieIndex<T> private constructor(val separator: String) : Index<T> {
     internal inline fun forEachNode(f: (List<String>, IndexNode<T>) -> Unit) {
         val remaining: Queue<Pair<List<String>, IndexNode<T>>> = ArrayDeque()
 
-        remaining.add(listOf("") to root)
+        remaining.add(emptyList<String>() to root)
 
         while (remaining.isNotEmpty()) {
             val (currentPath, currentNode) = remaining.poll()

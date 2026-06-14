@@ -20,7 +20,16 @@ class IndexSpec : WordSpec({
     include(indexSpec(type = "map-custom"))
     include(indexSpec(type = "trie-mutable"))
     include(indexSpec(type = "shared"))
+
+    listOf("/", "\\").forEach { separator ->
+        include(schemeSpec(type = "map-mutable", separator = separator))
+        include(schemeSpec(type = "map-concurrent", separator = separator))
+        include(schemeSpec(type = "map-custom", separator = separator))
+        include(schemeSpec(type = "trie-mutable", separator = separator))
+        include(schemeSpec(type = "shared", separator = separator))
+    }
 }) {
+    @Suppress("LargeClass")
     companion object {
         fun indexSpec(type: String) = wordSpec {
             fun createIndex(): Index<Int> = when (type) {
@@ -583,6 +592,226 @@ class IndexSpec : WordSpec({
                     indexWithDifferentType.putAll(entries = original.toMap())
 
                     original.sameElements(indexWithDifferentType) should be(true)
+                }
+            }
+        }
+
+        fun schemeSpec(type: String, separator: String) = wordSpec {
+            fun createIndex(): Index<Int> = when (type) {
+                "map-mutable" -> MapIndex.mutable()
+                "map-concurrent" -> MapIndex.concurrent()
+                "map-custom" -> MapIndex.custom(map = HashMap())
+                "trie-mutable" -> TrieIndex.mutable(separator = separator)
+                "shared" -> SharedIndex.custom(store = SharedIndex.SharedIndexStore(separator = separator))
+                else -> throw IllegalArgumentException("Unexpected type provided: [$type]")
+            }
+
+            fun createIndex(schemeMapper: SchemeMapper): Index<Int> = when (type) {
+                "map-mutable" -> MapIndex.mutable(schemeMapper)
+                "map-concurrent" -> MapIndex.concurrent(schemeMapper)
+                "map-custom" -> MapIndex.custom(map = HashMap(), schemeMapper = schemeMapper)
+                "trie-mutable" -> TrieIndex.mutable(separator = separator, schemeMapper = schemeMapper)
+                "shared" -> SharedIndex.custom(
+                    store = SharedIndex.SharedIndexStore(separator = separator, schemeMapper = schemeMapper)
+                )
+
+                else -> throw IllegalArgumentException("Unexpected type provided: [$type]")
+            }
+
+            // builds a schemeless/local path, e.g. "/a/b/c" (or "\a\b\c")
+            fun local(vararg segments: String): String =
+                segments.joinToString(separator, prefix = separator)
+
+            // builds a scheme-qualified path, e.g. "photos:/a/b/c" (or "photos:\a\b\c")
+            fun scheme(name: String, vararg segments: String): String =
+                name + ":" + segments.joinToString(separator, prefix = separator)
+
+            "An Index ($type, separator=$separator)" should {
+                "preserve schemes and keep them distinct from the bare path" {
+                    val index = createIndex()
+                    index.put(local("a", "b", "c"), 1)
+                    index.put(scheme("fs", "a", "b", "c"), 2)
+                    index.put(scheme("photos", "a", "b", "c"), 3)
+
+                    index.size should be(3)
+                    index.get(local("a", "b", "c")) should be(1)
+                    index.get(scheme("fs", "a", "b", "c")) should be(2)
+                    index.get(scheme("photos", "a", "b", "c")) should be(3)
+                    index.get(scheme("file", "a", "b", "c")) should be(null)
+
+                    index.keys should be(
+                        setOf(
+                            local("a", "b", "c"),
+                            scheme("fs", "a", "b", "c"),
+                            scheme("photos", "a", "b", "c")
+                        )
+                    )
+                }
+
+                "isolate different schemes sharing the same segments" {
+                    val index = createIndex()
+                    index.put(scheme("photos", "a", "b"), 1)
+                    index.put(scheme("music", "a", "b"), 2)
+                    index.put(local("a", "b"), 3)
+
+                    index.size should be(3)
+
+                    index.put(scheme("photos", "a", "b"), 10) { _, existing, current -> (existing ?: 0) + current }
+                    index.get(scheme("photos", "a", "b")) should be(11)
+                    index.get(scheme("music", "a", "b")) should be(2)
+                    index.get(local("a", "b")) should be(3)
+
+                    index.remove(scheme("photos", "a", "b"))
+                    index.size should be(2)
+                    index.get(scheme("photos", "a", "b")) should be(null)
+                    index.get(scheme("music", "a", "b")) should be(2)
+                    index.get(local("a", "b")) should be(3)
+                }
+
+                "support scheme roots and the bare root" {
+                    val index = createIndex()
+                    index.put(scheme("photos"), 1)
+                    index.put(local(), 2)
+
+                    index.size should be(2)
+                    index.get(scheme("photos")) should be(1)
+                    index.get(local()) should be(2)
+                    index.keys should be(setOf(scheme("photos"), local()))
+                }
+
+                "not treat a colon inside a segment as a scheme" {
+                    val index = createIndex()
+                    index.put(local("a", "b:c", "d"), 1)
+                    index.put(scheme("photos", "a", "b:c"), 2)
+
+                    index.size should be(2)
+                    index.get(local("a", "b:c", "d")) should be(1)
+                    index.get(scheme("photos", "a", "b:c")) should be(2)
+                    index.keys should be(
+                        setOf(
+                            local("a", "b:c", "d"),
+                            scheme("photos", "a", "b:c")
+                        )
+                    )
+                }
+
+                "treat two-character schemes as schemes but single-character and numeric prefixes as plain paths" {
+                    val index = createIndex()
+
+                    index.put(scheme("ab", "x"), 1)
+                    index.get(scheme("ab", "x")) should be(1)
+                    index.keys should be(setOf(scheme("ab", "x")))
+
+                    val drive = "c:" + separator + "x"
+                    val numeric = "12:" + separator + "x"
+                    index.put(drive, 2)
+                    index.put(numeric, 3)
+
+                    index.size should be(3)
+                    index.get(drive) should be(2)
+                    index.get(numeric) should be(3)
+                    index.contains(drive) should be(true)
+                }
+
+                "support deep scheme-qualified paths" {
+                    val index = createIndex()
+                    val deep = scheme("photos", "a", "b", "c", "d", "e")
+                    index.put(deep, 1)
+                    index.put(scheme("photos", "a", "b"), 2)
+
+                    index.size should be(2)
+                    index.get(deep) should be(1)
+                    index.get(scheme("photos", "a", "b")) should be(2)
+                    index.contains(deep) should be(true)
+                    index.contains(scheme("photos", "a", "b", "c")) should be(false)
+                }
+
+                "collapse aliased schemes with a custom mapper" {
+                    val index = createIndex(Schemes.aliases("fs", "file"))
+
+                    index.put(scheme("fs", "a", "b", "c"), 1)
+                    index.size should be(1)
+                    index.get(local("a", "b", "c")) should be(1)
+                    index.get(scheme("file", "a", "b", "c")) should be(1)
+                    index.get(scheme("FS", "a", "b", "c")) should be(1)
+
+                    index.put(scheme("file", "a", "b", "c"), 5) { _, existing, current -> (existing ?: 0) + current }
+                    index.get(local("a", "b", "c")) should be(6)
+                    index.size should be(1)
+
+                    index.put(scheme("photos", "a", "b", "c"), 2)
+                    index.size should be(2)
+                    index.get(scheme("photos", "a", "b", "c")) should be(2)
+
+                    index.keys should be(
+                        setOf(
+                            local("a", "b", "c"),
+                            scheme("photos", "a", "b", "c")
+                        )
+                    )
+                }
+
+                "round-trip scheme-qualified paths through encoding" {
+                    val original = createIndex()
+                    original.putAll(
+                        entries = mapOf(
+                            scheme("photos", "a", "b", "c") to 1,
+                            scheme("music", "a", "b", "c") to 2,
+                            local("a", "b", "c") to 3
+                        )
+                    )
+
+                    val encoded = original.encode { it }
+
+                    val decoded = when (type) {
+                        "map-mutable" -> MapIndex.decodedMutable(encoded) { it }
+                        "map-concurrent" -> MapIndex.decodedConcurrent(encoded) { it }
+                        "map-custom" -> MapIndex.decodedCustom(encoded, HashMap()) { it }
+                        "trie-mutable" -> TrieIndex.decoded(encoded, separator) { it }
+                        "shared" -> SharedIndex.decodedCustom(
+                            encoded = encoded, store = SharedIndex.SharedIndexStore(separator = separator)
+                        ) { it }
+
+                        else -> throw IllegalArgumentException("Unexpected type provided: [$type]")
+                    }
+
+                    decoded.get(scheme("photos", "a", "b", "c")) should be(1)
+                    decoded.get(scheme("music", "a", "b", "c")) should be(2)
+                    decoded.get(local("a", "b", "c")) should be(3)
+                    decoded.toMap() should be(original.toMap())
+                }
+
+                "round-trip arbitrary path-like strings" {
+                    val paths = listOf(
+                        // unix, short and long
+                        "/", "/a", "/a/b/c", "/a/b/c/d/e/f/g/h/i/j",
+                        // windows
+                        "C:\\Users\\foo", "C:/Users/foo", "C:foo", "\\\\server\\share\\file", "\\\\?\\C:\\very\\long",
+                        // schemes, short and long
+                        "photos:", "photos:/", "photos:/a", "photos:/a/b/c", "music:/x/y", "x-y.z+1:/a/b",
+                        // windows + scheme
+                        "fs:C:\\Users\\foo", "file:\\a\\b\\c", "photos:C:/x/y", "fs:\\\\server\\share\\file",
+                        // malformed / repeated / empty separators
+                        "", "//", "////", "///a///b///", "photos://///", "photos://a//b", "C://\\/\\", ":/a", "://x", "/a/b/",
+                        // special characters
+                        "/a b/c d", "/а/电/é", "/📁/x", "/a-b_c.d/e@f/g&h", "/a%20b/c(1)", "photos:/a b/π"
+                    )
+
+                    paths.forEach { path ->
+                        withClue("path=[$path]") {
+                            val index = createIndex()
+
+                            index.put(path, 1)
+                            index.get(path) should be(1)
+                            index.contains(path) should be(true)
+                            index.size should be(1)
+
+                            index.remove(path)
+                            index.get(path) should be(null)
+                            index.contains(path) should be(false)
+                            index.size should be(0)
+                        }
+                    }
                 }
             }
         }
