@@ -177,7 +177,7 @@ class MapIndex<T> private constructor(
 
     private fun normalize(path: String): String {
         if (schemeMapper === Schemes.Identity) return path
-        val (rawScheme, rest) = Schemes.split(path)
+        val (rawScheme, rest) = Schemes.extract(path)
         val scheme = schemeMapper(rawScheme)
         return if (scheme.isNullOrEmpty()) rest else "$scheme${Schemes.Delimiter}$rest"
     }

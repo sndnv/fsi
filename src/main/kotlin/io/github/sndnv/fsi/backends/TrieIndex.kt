@@ -467,7 +467,7 @@ class TrieIndex<T> private constructor(
      * @see rebuild
      */
     internal fun String.parts(): List<String> {
-        val (rawScheme, rest) = Schemes.split(this)
+        val (rawScheme, rest) = Schemes.extract(this)
         val scheme = schemeMapper(rawScheme) ?: ""
         return listOf(scheme) + rest.split(separator).filter { it.isNotBlank() }
     }
