@@ -90,7 +90,7 @@ class SchemesSpec : WordSpec({
                 Triple(" fs:/a", null, " fs:/a")
             ).forEach { (input, expectedScheme, expectedRest) ->
                 withClue("input=[$input]") {
-                    Schemes.split(input) should be(expectedScheme to expectedRest)
+                    Schemes.extract(input) should be(expectedScheme to expectedRest)
                 }
             }
         }

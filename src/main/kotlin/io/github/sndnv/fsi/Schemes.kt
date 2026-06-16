@@ -63,10 +63,11 @@ object Schemes {
     private val pattern: Pattern = Pattern.compile("^([A-Za-z][A-Za-z0-9+.-]+)$Delimiter")
 
     /**
-     * Splits the provided [path] into its raw scheme (or `null` if it has none) and the remainder of the
+     * Splits the provided [path] into its scheme (or `null` if it has none) and the remainder of the
      * path (everything after the scheme's [Delimiter], or the whole [path] when there is no scheme).
      */
-    internal fun split(path: String): Pair<String?, String> {
+    @JvmStatic
+    fun extract(path: String): Pair<String?, String> {
         val matcher = pattern.matcher(path)
 
         return if (matcher.lookingAt()) {
