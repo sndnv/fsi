@@ -24,12 +24,18 @@ class TrieIndexSpec : WordSpec({
             e.message should be("A non-empty separator must be provided but [$separator] found")
         }
 
-        "fail if the separator is the scheme delimiter" {
-            val e = shouldThrow<IllegalArgumentException> {
-                TrieIndex.mutable<Int>(":")
-            }
+        "fail if the separator contains the scheme delimiter" {
+            listOf(":", "a:", ":/").forEach { separator ->
+                withClue("separator=[$separator]") {
+                    val e = shouldThrow<IllegalArgumentException> {
+                        TrieIndex.mutable<Int>(separator)
+                    }
 
-            e.message should be("The separator must not be the scheme delimiter [:]")
+                    e.message should be(
+                        "The separator must not contain the scheme delimiter [:] but [$separator] found"
+                    )
+                }
+            }
         }
 
         "distinguish a scheme-qualified path from a local path with a matching colon segment" {
@@ -55,7 +61,7 @@ class TrieIndexSpec : WordSpec({
             mapOf(
                 "fs:\\a\\b" to "fs:\\a\\b",
                 "photos:\\a\\b\\c" to "photos:\\a\\b\\c",
-                "fs:C:\\Users\\foo" to "fs:\\C:\\Users\\foo",
+                "fs:C:\\Users\\foo" to "fs:C:\\Users\\foo",
                 "fs:\\\\server\\share" to "fs:\\server\\share"
             ).forEach { (input, expected) ->
                 withClue("input=[$input]") {
@@ -69,13 +75,152 @@ class TrieIndexSpec : WordSpec({
             }
         }
 
-        "normalize repeated, trailing and missing leading separators" {
+        "round-trip Windows drive paths without injecting a leading separator" {
+            mapOf(
+                "C:\\source" to "C:\\source",
+                "C:\\a\\b\\c.dat" to "C:\\a\\b\\c.dat",
+                "C:\\Users\\foo" to "C:\\Users\\foo",
+                "C:\\a\\\\b\\" to "C:\\a\\b"
+            ).forEach { (input, expected) ->
+                withClue("input=[$input]") {
+                    val index = TrieIndex.mutable<Int>(separator = "\\")
+                    index.put(input, 1)
+
+                    index.size should be(1)
+                    index.get(input) should be(1)
+                    index.keys should be(setOf(expected))
+                }
+            }
+        }
+
+        "round-trip Windows drive paths expressed with forward slashes" {
+            mapOf(
+                "C:/source" to "C:/source",
+                "C:/a/b/c.dat" to "C:/a/b/c.dat"
+            ).forEach { (input, expected) ->
+                withClue("input=[$input]") {
+                    val index = TrieIndex.mutable<Int>(separator = "/")
+                    index.put(input, 1)
+
+                    index.size should be(1)
+                    index.get(input) should be(1)
+                    index.keys should be(setOf(expected))
+                }
+            }
+        }
+
+        "not treat single-character drive letters as schemes" {
+            val index = TrieIndex.mutable<Int>(separator = "\\")
+            index.put("C:\\source", 1)
+            index.put("photos:\\source", 2)
+
+            index.size should be(2)
+            index.keys should be(setOf("C:\\source", "photos:\\source"))
+        }
+
+        "not treat non-drive two-character prefixes as drive roots" {
+            val index = TrieIndex.mutable<Int>(separator = "/")
+            index.put("5:/x", 1)
+            index.put("ab/c", 2)
+
+            index.size should be(2)
+            index.get("5:/x") should be(1)
+            index.get("ab/c") should be(2)
+            index.keys should be(setOf("5:/x", "ab/c"))
+        }
+
+        "collapse a bare Windows drive root" {
+            mapOf(
+                "C:\\" to "C:",
+                "C:" to "C:"
+            ).forEach { (input, expected) ->
+                withClue("input=[$input]") {
+                    val index = TrieIndex.mutable<Int>(separator = "\\")
+                    index.put(input, 1)
+
+                    index.size should be(1)
+                    index.get(input) should be(1)
+                    index.keys should be(setOf(expected))
+                }
+            }
+        }
+
+        "round-trip UNC paths" {
+            mapOf(
+                "//server/share" to "//server/share",
+                "//server/share/path" to "//server/share/path",
+                "//server//share//" to "//server/share"
+            ).forEach { (input, expected) ->
+                withClue("input=[$input]") {
+                    val index = TrieIndex.mutable<Int>(separator = "/")
+                    index.put(input, 1)
+
+                    index.size should be(1)
+                    index.get(input) should be(1)
+                    index.keys should be(setOf(expected))
+                }
+            }
+        }
+
+        "round-trip UNC paths using a backslash separator" {
+            val index = TrieIndex.mutable<Int>(separator = "\\")
+            index.put("\\\\server\\share\\path", 1)
+
+            index.size should be(1)
+            index.get("\\\\server\\share\\path") should be(1)
+            index.keys should be(setOf("\\\\server\\share\\path"))
+        }
+
+        "keep a UNC path distinct from a drive-letter head" {
+            val index = TrieIndex.mutable<Int>(separator = "/")
+            index.put("C:/x", 1)
+            index.put("//C:/x", 2)
+
+            index.size should be(2)
+            index.get("C:/x") should be(1)
+            index.get("//C:/x") should be(2)
+            index.keys should be(setOf("C:/x", "//C:/x"))
+        }
+
+        "merge a drive path with its redundantly-rooted form" {
+            val index = TrieIndex.mutable<Int>(separator = "/")
+            index.put("C:/x", 1)
+            index.put("/C:/x", 2)
+
+            index.size should be(1)
+            index.get("C:/x") should be(2)
+            index.get("/C:/x") should be(2)
+            index.keys should be(setOf("C:/x"))
+        }
+
+        "preserve drive roots under a scheme and reject non-drive heads" {
+            mapOf(
+                "fs:a:\\x" to "fs:a:\\x",
+                "fs:z:\\x" to "fs:z:\\x",
+                "fs:A:\\x" to "fs:A:\\x",
+                "fs:Z:\\x" to "fs:Z:\\x",
+                "fs:5:\\x" to "fs:\\5:\\x",
+                "fs:ab\\x" to "fs:\\ab\\x",
+                "fs:a:b\\x" to "fs:\\a:b\\x"
+            ).forEach { (input, expected) ->
+                withClue("input=[$input]") {
+                    val index = TrieIndex.mutable<Int>(separator = "\\")
+                    index.put(input, 1)
+
+                    index.size should be(1)
+                    index.get(input) should be(1)
+                    index.keys should be(setOf(expected))
+                }
+            }
+        }
+
+        "normalize repeated and trailing separators while preserving rootedness" {
             mapOf(
                 "/a/b/c" to "/a/b/c",
-                "a/b/c" to "/a/b/c",
+                "a/b/c" to "a/b/c",
                 "/a//b///c/" to "/a/b/c",
                 "////" to "/",
-                "" to "/",
+                "" to "",
                 "/" to "/"
             ).forEach { (input, expected) ->
                 withClue("input=[$input]") {
@@ -84,6 +229,17 @@ class TrieIndexSpec : WordSpec({
                     index.keys should be(setOf(expected))
                 }
             }
+        }
+
+        "preserve whitespace-only path segments" {
+            val index = TrieIndex.mutable<Int>(separator = "/")
+            index.put("/a/ /b", 1)
+            index.put("/a/b", 2)
+
+            index.size should be(2)
+            index.get("/a/ /b") should be(1)
+            index.get("/a/b") should be(2)
+            index.keys should be(setOf("/a/ /b", "/a/b"))
         }
 
         "normalize malformed scheme-qualified paths" {
@@ -102,11 +258,24 @@ class TrieIndexSpec : WordSpec({
             }
         }
 
-        "treat equivalent local paths as the same entry" {
+        "treat differently-rooted paths as distinct entries" {
             val index = TrieIndex.mutable<Int>(separator = "/")
             index.put("/a/b", 1)
             index.put("a/b", 2)
-            index.put("//a//b//", 3)
+            index.put("//a/b", 3)
+
+            index.size should be(3)
+            index.get("/a/b") should be(1)
+            index.get("a/b") should be(2)
+            index.get("//a/b") should be(3)
+            index.keys should be(setOf("/a/b", "a/b", "//a/b"))
+        }
+
+        "collapse redundant interior and trailing separators within an entry" {
+            val index = TrieIndex.mutable<Int>(separator = "/")
+            index.put("/a/b", 1)
+            index.put("/a//b", 2)
+            index.put("/a/b//", 3)
 
             index.size should be(1)
             index.get("/a/b") should be(3)

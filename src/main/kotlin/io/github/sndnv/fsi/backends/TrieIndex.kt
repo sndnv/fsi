@@ -39,8 +39,21 @@ import java.util.regex.Pattern
  *   encoded should be(decoded)
  * ```
  *
- * **Note:** Paths are treated as absolute and normalized - redundant and trailing separators are collapsed
- * and a leading separator is always present, so `a/b/c`, `/a//b/c` and `/a/b/c/` all refer to `/a/b/c`.
+ * **Note:** Paths are normalized so that redundant interior and trailing separators are collapsed
+ * (`/a//b/c/` and `/a/b/c` both refer to `/a/b/c`), while the leading separators that root a path are
+ * preserved, so each distinct rooting is a distinct key:
+ *  - a relative path stays relative - `a/b/c` is kept as `a/b/c` and is *not* the same key as `/a/b/c`;
+ *  - a single leading separator denotes an absolute path - `/a/b/c`;
+ *  - exactly two leading separators denote a UNC path - `//server/share` (three or more collapse to one);
+ *  - a Windows drive root is preserved as-is - `C:\source` and `C:/source` are kept rather than given a
+ *    synthetic leading separator (the bare drive root `C:\` collapses to `C:`).
+ *
+ * A single leading separator in front of a drive head is absorbed (`/C:/x` normalizes to `C:/x`), while a
+ * UNC root in front of a drive head is kept distinct (`//C:/x`).
+ *
+ * Scheme-qualified paths (see [Schemes]) are always treated as absolute - leading separators after the
+ * scheme collapse to one, so `photos://a/b` and `photos:/a/b` refer to the same key - while drive roots
+ * are still preserved (`fs:C:\source`).
  *
  * @see mutable
  * @see MapIndex
@@ -53,8 +66,8 @@ class TrieIndex<T> private constructor(
         require(separator.isNotBlank()) {
             "A non-empty separator must be provided but [$separator] found"
         }
-        require(separator != Schemes.Delimiter) {
-            "The separator must not be the scheme delimiter [${Schemes.Delimiter}]"
+        require(!separator.contains(Schemes.Delimiter)) {
+            "The separator must not contain the scheme delimiter [${Schemes.Delimiter}] but [$separator] found"
         }
     }
 
@@ -459,31 +472,86 @@ class TrieIndex<T> private constructor(
     /**
      * Splits this path string into its parts, based on the provided [separator].
      *
-     * The first element is always the (mapped) scheme of the path - blank for a schemeless/local path - so
-     * that the scheme becomes the top-most level of the tree. The remaining elements are the path segments,
-     * with blank segments removed; for example `"photos:/a/b//c"` is split into `listOf("photos", "a", "b", "c")`
-     * and `"/a/b/c"` into `listOf("", "a", "b", "c")`.
+     * The first element is always the (mapped) scheme of the path - empty for a schemeless/local path - so
+     * that the scheme becomes the top-most level of the tree. The remaining elements are the path segments
+     * (with empty segments removed, collapsing redundant separators; whitespace-only segments are kept)
+     * prefixed, where applicable, by a root marker that records how the path is rooted, so that
+     * differently-rooted paths become distinct keys:
+     *  - an absolute path keeps no marker, for example `"/a/b/c"` becomes `listOf("", "a", "b", "c")`;
+     *  - a relative path is marked with a leading empty segment, so `"a/b/c"` becomes `listOf("", "", "a", "b", "c")`;
+     *  - a UNC path is marked with the [separator] itself, so `"//server/share"` becomes `listOf("", "/", "server", "share")`;
+     *  - a Windows drive root needs no marker (the drive segment is itself the root), so `"C:\a\b"` becomes
+     *    `listOf("", "C:", "a", "b")`.
+     *
+     * Scheme-qualified paths are always treated as absolute (no relative/UNC marker), for example
+     * `"photos:/a/b//c"` becomes `listOf("photos", "a", "b", "c")`.
      *
      * @see rebuild
      */
     internal fun String.parts(): List<String> {
         val (rawScheme, rest) = Schemes.extract(this)
         val scheme = schemeMapper(rawScheme) ?: ""
-        return listOf(scheme) + rest.split(separator).filter { it.isNotBlank() }
+        val segments = rest.split(separator).filter { it.isNotEmpty() }
+
+        val body = when {
+            scheme.isNotEmpty() -> segments
+            else -> when (rest.leadingSeparators()) {
+                0 -> if (segments.firstOrNull()?.isVolumeRoot() == true) segments else listOf("") + segments
+                2 -> listOf(separator) + segments
+                else -> segments
+            }
+        }
+
+        return listOf(scheme) + body
     }
 
     /**
      * Rebuilds the specified list of path parts (as produced by [parts]) into a full path, based on the
-     * provided [separator]. The first element is treated as the scheme.
+     * provided [separator]. The first element is treated as the scheme, the remainder as the (optionally
+     * marker-prefixed) body. The root marker determines how the path is rooted:
+     *  - a leading blank segment marks a relative path - no leading separator is added;
+     *  - a leading [separator] segment marks a UNC path - two leading separators are added;
+     *  - a leading drive segment (see [isVolumeRoot]) is itself the root - no leading separator is added;
+     *  - otherwise the path is absolute - a single leading separator is added.
      *
      * @see parts
      */
     internal fun rebuild(parts: List<String>): String {
         if (parts.isEmpty()) return separator
         val scheme = parts.first()
-        val body = separator + parts.drop(1).joinToString(separator)
-        return if (scheme.isEmpty()) body else "$scheme${Schemes.Delimiter}$body"
+        val body = parts.drop(1)
+        val first = body.firstOrNull()
+
+        val (prefix, segments) = when {
+            first == "" -> "" to body.drop(1)
+            first == separator -> (separator + separator) to body.drop(1)
+            first != null && first.isVolumeRoot() -> "" to body
+            else -> separator to body
+        }
+
+        val rest = prefix + segments.joinToString(separator)
+
+        return if (scheme.isEmpty()) rest else "$scheme${Schemes.Delimiter}$rest"
     }
+
+    /**
+     * Counts the number of leading [separator] occurrences in this string, used to determine how a path
+     * is rooted (relative, absolute or UNC).
+     */
+    private fun String.leadingSeparators(): Int {
+        var count = 0
+        while (startsWith(separator, startIndex = count * separator.length)) {
+            count += 1
+        }
+        return count
+    }
+
+    /**
+     * Checks whether this path segment is a volume/drive root, such as `C:` in `C:\source`. Such a segment
+     * is itself the root of the path, so neither [parts] nor [rebuild] adds a separator in front of it.
+     */
+    private fun String.isVolumeRoot(): Boolean =
+        length == 2 && this[1] == ':' && (this[0] in 'a'..'z' || this[0] in 'A'..'Z')
 
     /**
      * Retrieves the node at the provided [path], if it exists.

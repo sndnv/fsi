@@ -173,19 +173,28 @@ out of the box: `Schemes.Identity` (the default), `Schemes.aliases(...)` and `Sc
 
 ## Path normalization
 
-Paths are treated as **absolute**. `TrieIndex` and `SharedIndex` normalize each path - redundant and trailing
-separators are collapsed and a leading separator is always present - so, for example, `a/b/c`, `/a//b/c` and
-`/a/b/c/` all refer to the same entry (`/a/b/c`):
+`TrieIndex` and `SharedIndex` normalize each path by collapsing redundant interior and trailing separators,
+while preserving how the path is rooted - so each distinct rooting is a distinct entry:
+
+- a relative path stays relative (`a/b/c` is **not** the same entry as `/a/b/c`);
+- a single leading separator is an absolute path (`/a/b/c`);
+- exactly two leading separators are a UNC path (`//server/share`; three or more collapse to one);
+- a Windows drive root is preserved as-is (`C:\source` and `C:/source`; the bare drive root `C:\` collapses to `C:`).
 
 ```kotlin
 val trie = TrieIndex.mutable<Int>(separator = "/")
-trie.put("a/b/c", 1)
-trie.keys // ["/a/b/c"]
+trie.put("/a//b/c/", 1)
+trie.keys // ["/a/b/c"] - redundant/trailing separators collapsed
+trie.put("a/b/c", 2)
+trie.keys // ["/a/b/c", "a/b/c"] - relative and absolute are distinct
 ```
 
+Scheme-qualified paths (see above) are always treated as absolute, so `photos://a/b` and `photos:/a/b` refer
+to the same entry.
+
 `MapIndex` stores keys directly (it has no separator), so it does not perform this normalization - there,
-`a/b/c` and `/a/b/c` are distinct keys. If you need identical behavior across all backends, pass already
-normalized, absolute paths.
+`a/b/c` and `/a/b/c` are distinct keys, but redundant separators are not collapsed either. If you need
+identical behavior across all backends, pass already normalized paths.
 
 ## Usage
 
