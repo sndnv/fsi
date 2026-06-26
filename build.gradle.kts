@@ -4,7 +4,7 @@ import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 import java.nio.file.Paths
 
 group = "io.github.sndnv"
-version = "1.2.2"
+version = "1.2.3-SNAPSHOT"
 
 repositories {
     mavenCentral()
